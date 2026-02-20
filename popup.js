@@ -5,69 +5,107 @@ const DEFAULTS = {
   lastInjectedSite: ""
 };
 
+const SUPPORTED_SITES = {
+  "chatgpt.com": "ChatGPT",
+  "chat.openai.com": "ChatGPT",
+  "claude.ai": "Claude",
+  "gemini.google.com": "Gemini",
+  "www.perplexity.ai": "Perplexity",
+  "perplexity.ai": "Perplexity"
+};
+
 const toggle = document.getElementById("enabledToggle");
 const previewText = document.getElementById("previewText");
+const statusDot = document.getElementById("statusDot");
+const siteStatus = document.getElementById("siteStatus");
+
+let currentEnabled = true;
+let liveInterval = null;
 
 initializePopup();
 
 function initializePopup() {
   chrome.storage.sync.get(DEFAULTS, (stored) => {
-    const settings = {
-      ...DEFAULTS,
-      ...stored
-    };
-
-    toggle.checked = Boolean(settings.enabled);
-    renderPreview(settings.enabled, settings.lastInjectedContext);
+    const settings = { ...DEFAULTS, ...stored };
+    currentEnabled = Boolean(settings.enabled);
+    toggle.checked = currentEnabled;
+    updateUI();
   });
 
   toggle.addEventListener("change", () => {
-    const enabled = toggle.checked;
-    chrome.storage.sync.set({ enabled }, () => {
-      renderPreview(enabled, "");
-    });
+    currentEnabled = toggle.checked;
+    chrome.storage.sync.set({ enabled: currentEnabled });
+    updateUI();
   });
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== "sync") {
-      return;
-    }
-
+    if (areaName !== "sync") return;
     if (Object.prototype.hasOwnProperty.call(changes, "enabled")) {
-      const enabled = Boolean(changes.enabled.newValue);
-      toggle.checked = enabled;
-      renderPreview(enabled, "");
-    }
-
-    if (Object.prototype.hasOwnProperty.call(changes, "lastInjectedContext")) {
-      chrome.storage.sync.get(DEFAULTS, (stored) => {
-        const enabled = Boolean(stored.enabled);
-        renderPreview(enabled, stored.lastInjectedContext || "");
-      });
+      currentEnabled = Boolean(changes.enabled.newValue);
+      toggle.checked = currentEnabled;
+      updateUI();
     }
   });
 
-  window.setInterval(() => {
-    chrome.storage.sync.get(DEFAULTS, (stored) => {
-      renderPreview(Boolean(stored.enabled), stored.lastInjectedContext || "");
-    });
-  }, 30000);
+  detectCurrentSite();
+  startLivePreview();
 }
 
-function renderPreview(enabled, lastInjectedContext) {
-  if (!enabled) {
-    previewText.textContent = "Injection is disabled.";
+function updateUI() {
+  if (currentEnabled) {
+    statusDot.classList.add("active");
+  } else {
+    statusDot.classList.remove("active");
+  }
+  renderPreview();
+}
+
+function renderPreview() {
+  if (!currentEnabled) {
+    previewText.textContent = "Injection paused";
     return;
   }
+  previewText.textContent = buildTimeContextString(new Date());
+}
 
-  const preview = buildTimeContextString(new Date());
+function startLivePreview() {
+  if (liveInterval) clearInterval(liveInterval);
+  liveInterval = setInterval(() => {
+    if (currentEnabled) {
+      renderPreview();
+    }
+  }, 1000);
+}
 
-  if (lastInjectedContext && lastInjectedContext.startsWith("[Time Context:")) {
-    previewText.textContent = preview;
-    return;
+function detectCurrentSite() {
+  try {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs || !tabs[0] || !tabs[0].url) {
+        setSiteStatus(null);
+        return;
+      }
+      try {
+        const url = new URL(tabs[0].url);
+        const siteName = SUPPORTED_SITES[url.hostname] || null;
+        setSiteStatus(siteName);
+      } catch {
+        setSiteStatus(null);
+      }
+    });
+  } catch {
+    setSiteStatus(null);
   }
+}
 
-  previewText.textContent = preview;
+function setSiteStatus(siteName) {
+  const el = siteStatus.querySelector(".site-status-text");
+  if (siteName) {
+    el.textContent = `✓ Connected to ${siteName}`;
+    el.classList.add("connected");
+  } else {
+    el.textContent = "— Not on a supported site";
+    el.classList.remove("connected");
+  }
 }
 
 function buildTimeContextString(now) {
@@ -76,10 +114,8 @@ function buildTimeContextString(now) {
   const date = now.toLocaleDateString(undefined, { day: "numeric" });
   const year = now.toLocaleDateString(undefined, { year: "numeric" });
   const time = now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", hour12: true });
-
   const zoneAbbreviation = getTimeZoneAbbreviation(now);
   const utcOffset = getUtcOffsetLabel(now);
-
   return `[Time Context: ${day}, ${month} ${date}, ${year} — ${time} ${zoneAbbreviation} (${utcOffset})]`;
 }
 
@@ -87,13 +123,8 @@ function getTimeZoneAbbreviation(now) {
   try {
     const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(now);
     const zonePart = parts.find((part) => part.type === "timeZoneName");
-    if (zonePart?.value) {
-      return zonePart.value;
-    }
-  } catch (_error) {
-    // Fallback below.
-  }
-
+    if (zonePart?.value) return zonePart.value;
+  } catch {}
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "Local";
 }
 
@@ -103,10 +134,6 @@ function getUtcOffsetLabel(now) {
   const absolute = Math.abs(minutesEast);
   const hours = Math.floor(absolute / 60);
   const minutes = absolute % 60;
-
-  if (minutes === 0) {
-    return `UTC${sign}${hours}`;
-  }
-
+  if (minutes === 0) return `UTC${sign}${hours}`;
   return `UTC${sign}${hours}:${String(minutes).padStart(2, "0")}`;
 }

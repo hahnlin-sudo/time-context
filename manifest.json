@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TimeContext",
-  "description": "Injects current date and time context into supported AI chats on the first message of each conversation.",
+  "description": "Injects the current date, time, and timezone into AI chats so your AI always knows when it is. Works with ChatGPT, Claude, Gemini, and Perplexity.",
+  "homepage_url": "https://github.com/hahnlin-sudo/time-context",
   "version": "1.0.1",
   "permissions": [
     "storage",

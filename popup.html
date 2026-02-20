@@ -7,36 +7,42 @@
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
-    <main class="card">
+    <main class="container">
       <header class="header">
-        <h1>TimeContext</h1>
-        <p class="subtitle">Keep AI grounded in real-world time.</p>
+        <div class="header-left">
+          <span class="header-title">⏱️ TimeContext</span>
+        </div>
+        <span class="header-version">v1.0.1</span>
       </header>
 
       <section class="toggle-row">
-        <span class="toggle-label">Extension Enabled</span>
+        <div class="toggle-left">
+          <span class="status-dot" id="statusDot"></span>
+          <span class="toggle-label">Active</span>
+        </div>
         <label class="switch" for="enabledToggle">
           <input type="checkbox" id="enabledToggle" />
           <span class="slider"></span>
         </label>
       </section>
 
-      <section class="status-box">
-        <p class="status-title">Currently injecting:</p>
+      <section class="preview-card">
+        <span class="preview-label">INJECTING</span>
         <p id="previewText" class="preview-text"></p>
       </section>
 
-      <section class="sites-box">
-        <p class="sites-title">Supported sites</p>
-        <ul>
-          <li>chatgpt.com / chat.openai.com</li>
-          <li>claude.ai</li>
-          <li>gemini.google.com</li>
-          <li>www.perplexity.ai</li>
-        </ul>
+      <div class="site-status" id="siteStatus">
+        <span class="site-status-text">— Not on a supported site</span>
+      </div>
+
+      <section class="sites-section">
+        <span class="pill">ChatGPT</span>
+        <span class="pill">Claude</span>
+        <span class="pill">Gemini</span>
+        <span class="pill">Perplexity</span>
       </section>
 
-      <footer class="footer">Made to fight AI temporal blindness</footer>
+      <footer class="footer">v1.0.1 · Made by Hahnlin</footer>
     </main>
 
     <script src="popup.js"></script>

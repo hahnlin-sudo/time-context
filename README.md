@@ -1,49 +1,48 @@
-# TimeContext Chrome Extension
+# TimeContext ⏱️
 
-TimeContext is a Manifest V3 Chrome extension that injects a fresh time context line into the first message of each new conversation on supported AI chat sites.
+**Your AI doesn't know what day it is. This fixes that.**
 
-## 1) Load as an unpacked extension
+TimeContext is a lightweight Chrome extension that silently injects the current date, time, and timezone into your AI conversations. No more "I don't have access to the current date" responses.
 
-1. Open Chrome and go to `chrome://extensions`.
-2. Turn on **Developer mode** (top-right toggle).
-3. Click **Load unpacked**.
-4. Select the folder: `timecontext-extension/`.
-5. Confirm the extension appears as **TimeContext** and is enabled.
+## How It Works
 
-## 2) Test on each supported site
+TimeContext detects when you're chatting on a supported AI platform and automatically prepends the current timestamp to your first message in each conversation. The AI receives temporal context without you lifting a finger.
 
-Supported sites:
-- `https://chatgpt.com/*`
-- `https://chat.openai.com/*`
-- `https://claude.ai/*`
-- `https://gemini.google.com/*`
-- `https://www.perplexity.ai/*`
-- `https://perplexity.ai/*`
+**What gets injected:**
+```
+[Time Context: Friday, February 20, 2026 — 3:51 PM EST (UTC-5)]
+```
 
-Testing flow for each site:
-1. Open a supported site and start a **new conversation**.
-2. Type a normal first message (for example: `Help me schedule my week`).
-3. Send the message.
-4. Verify the first sent message starts with a line like:
-   - `[Time Context: Tuesday, February 18, 2026 — 4:06 PM EST (UTC-5)]`
-5. Send a second message in the same conversation.
-6. Verify the second message does **not** get an additional time context prefix.
+## Supported Platforms
 
-## 3) Console checks to confirm injection
+- **ChatGPT** (chatgpt.com)
+- **Claude** (claude.ai)
+- **Gemini** (gemini.google.com)
+- **Perplexity** (perplexity.ai)
 
-On a supported site, open DevTools Console and look for debug logs from the content script:
+## Install
 
-- `[TimeContext] Initialized on ...`
-- `[TimeContext] Bound keydown listener to chat input.`
-- `[TimeContext] Injected time context for ...`
-- `[TimeContext] Conversation changed via navigation; injection flag reset.`
+1. Download from the [Chrome Web Store](#) (coming soon)
+2. Or load as unpacked extension in Developer Mode
 
-If you do not see logs, refresh the page after loading/reloading the extension in `chrome://extensions`.
+## Features
 
-## 4) Known edge cases and limitations
+- ⏱️ Automatic time injection on first message
+- 🌍 Detects your timezone automatically
+- 🔒 Zero data collection — everything runs locally
+- 🎯 Smart detection — only injects once per conversation
+- 🌙 Clean dark mode UI
 
-- AI sites frequently change their DOM structure; selector updates may be needed over time.
-- On some UI variants, send-button detection can differ from keyboard submit behavior.
-- If a site uses a highly custom editor surface, the fallback contenteditable logic may need site-specific tuning.
-- The extension tracks "first message" using URL/navigation + new-conversation triggers. If a site starts a new thread without a detectable navigation or trigger, the reset may not happen until the next navigation event.
-- Timezone abbreviation formatting is browser/locale dependent (for example `EST`, `GMT-5`, or regional variants).
+## Why?
+
+AI models are trained on data with a knowledge cutoff. They genuinely don't know what time, day, or year it is unless you tell them. This makes scheduling, planning, and time-sensitive conversations frustrating.
+
+TimeContext makes the problem invisible.
+
+## Privacy
+
+TimeContext runs entirely in your browser. No data is sent anywhere. No analytics. No tracking. Your conversations stay yours.
+
+## Built by
+
+[@hahn1in](https://x.com/hahn1in)
