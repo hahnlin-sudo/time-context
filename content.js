@@ -86,8 +86,6 @@
   const CONTEXT_PREFIX = "[Time Context:";
 
   let extensionEnabled = true;
-  let hasInjectedForConversation = shouldAssumeContextAlreadyPresentByRoute();
-  let currentConversationKey = buildConversationKey();
   let lastKnownUrl = location.href;
   let trackedInput = null;
   let domObserver = null;
@@ -104,7 +102,7 @@
       installSubmitHandler();
       installStorageWatcher();
       bindToInputIfPresent();
-      log(`Initialized on ${siteKey}. Enabled=${extensionEnabled}. PreMarked=${hasInjectedForConversation}`);
+      log(`Initialized on ${siteKey}. Enabled=${extensionEnabled}. Injecting every message.`);
     });
   }
 
@@ -167,17 +165,6 @@
     }
 
     lastKnownUrl = location.href;
-    const nextConversationKey = buildConversationKey();
-    if (nextConversationKey !== currentConversationKey) {
-      currentConversationKey = nextConversationKey;
-      hasInjectedForConversation = shouldAssumeContextAlreadyPresentByRoute();
-      if (!hasInjectedForConversation) {
-        log("Conversation changed via navigation; injection flag reset.");
-      } else {
-        log("Conversation changed via navigation; existing-thread heuristic pre-marked injected.");
-      }
-    }
-
     bindToInputIfPresent();
   }
 
@@ -199,14 +186,7 @@
     document.addEventListener(
       "click",
       (event) => {
-        if (isNewConversationTrigger(event.target)) {
-          hasInjectedForConversation = false;
-          currentConversationKey = buildConversationKey();
-          log("New conversation trigger clicked; injection flag reset.");
-          return;
-        }
-
-        if (!extensionEnabled || hasInjectedForConversation) {
+        if (!extensionEnabled) {
           return;
         }
 
@@ -229,7 +209,7 @@
     document.addEventListener(
       "submit",
       (event) => {
-        if (!extensionEnabled || hasInjectedForConversation) {
+        if (!extensionEnabled) {
           return;
         }
 
@@ -289,7 +269,7 @@
   }
 
   function onInputKeydown(event) {
-    if (!extensionEnabled || hasInjectedForConversation) {
+    if (!extensionEnabled) {
       return;
     }
 
@@ -390,15 +370,12 @@
     }
 
     if (currentText.trimStart().startsWith(CONTEXT_PREFIX)) {
-      hasInjectedForConversation = true;
       return false;
     }
 
     const contextLine = buildTimeContextString(new Date());
     const nextText = `${contextLine}\n${currentText}`;
     writeInputText(inputElement, nextText);
-
-    hasInjectedForConversation = true;
 
     chrome.storage.sync.set({
       lastInjectedContext: contextLine,
