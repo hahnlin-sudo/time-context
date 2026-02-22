@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "TimeContext",
-  "description": "Injects the current date, time, and timezone into AI chats so your AI always knows when it is. Works with ChatGPT, Claude, Gemini, and Perplexity.",
+  "description": "Injects the current date, time, and timezone into AI chats so your AI always knows when it is. Works with ChatGPT and Claude.",
   "homepage_url": "https://github.com/hahnlin-sudo/time-context",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "permissions": [
     "storage",
     "activeTab",
@@ -12,10 +12,7 @@
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
-    "https://claude.ai/*",
-    "https://gemini.google.com/*",
-    "https://www.perplexity.ai/*",
-    "https://perplexity.ai/*"
+    "https://claude.ai/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -39,10 +36,7 @@
       "matches": [
         "https://chatgpt.com/*",
         "https://chat.openai.com/*",
-        "https://claude.ai/*",
-        "https://gemini.google.com/*",
-        "https://www.perplexity.ai/*",
-        "https://perplexity.ai/*"
+        "https://claude.ai/*"
       ],
       "js": [
         "content.js"

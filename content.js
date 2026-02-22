@@ -42,38 +42,6 @@
         "button[data-testid*='submit' i]"
       ]
     },
-    gemini: {
-      hosts: ["gemini.google.com"],
-      inputSelectors: [
-        "rich-textarea textarea",
-        "textarea",
-        "div[contenteditable='true'][role='textbox']",
-        "div[contenteditable='true'][aria-label*='message' i]",
-        "form [contenteditable='true']"
-      ],
-      sendButtonSelectors: [
-        "button[aria-label*='Send message' i]",
-        "button[aria-label*='Send' i]",
-        "button[aria-label*='Submit' i]",
-        "button[data-testid*='send' i]"
-      ]
-    },
-    perplexity: {
-      hosts: ["www.perplexity.ai", "perplexity.ai"],
-      inputSelectors: [
-        "textarea[placeholder*='Ask' i]",
-        "textarea",
-        "div[contenteditable='true'][role='textbox']",
-        "div.ProseMirror[contenteditable='true']",
-        "form [contenteditable='true']"
-      ],
-      sendButtonSelectors: [
-        "button[aria-label*='Send' i]",
-        "button[title*='Send' i]",
-        "button[data-testid*='send' i]",
-        "button[data-testid*='submit' i]"
-      ]
-    }
   };
 
   const siteKey = detectSiteKey();
@@ -512,23 +480,47 @@
       return;
     }
 
-    const nativeTextContentSetter = Object.getOwnPropertyDescriptor(window.HTMLElement.prototype, "textContent")?.set;
-    nativeTextContentSetter?.call(element, nextText);
+    // For contenteditable (Lexical/ProseMirror editors like Claude),
+    // we must use execCommand or clipboard paste so the framework's
+    // internal state stays in sync with the DOM.
+    element.focus();
 
-    try {
-      element.dispatchEvent(
-        new InputEvent("input", {
-          bubbles: true,
-          inputType: "insertText",
-          data: nextText
-        })
-      );
-    } catch (_error) {
-      element.dispatchEvent(new Event("input", { bubbles: true }));
+    // Select all existing content, then replace with full text (context + original)
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      selection.removeAllRanges();
+      selection.addRange(range);
     }
 
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-    placeCursorAtEnd(element);
+    // Use execCommand insertText — Lexical/ProseMirror listen to this
+    if (document.execCommand("insertText", false, nextText)) {
+      log("Wrote via execCommand insertText");
+      placeCursorAtEnd(element);
+      return;
+    }
+
+    // Fallback: clipboard-based paste
+    try {
+      const dt = new DataTransfer();
+      dt.setData("text/plain", nextText);
+      const pasteEvent = new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dt
+      });
+      element.dispatchEvent(pasteEvent);
+      log("Wrote via synthetic paste event");
+    } catch (_error) {
+      // Last resort: direct textContent set
+      const nativeTextContentSetter = Object.getOwnPropertyDescriptor(window.HTMLElement.prototype, "textContent")?.set;
+      nativeTextContentSetter?.call(element, nextText);
+      element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: nextText }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      placeCursorAtEnd(element);
+      log("Wrote via textContent fallback");
+    }
   }
 
   function placeCursorAtEnd(element) {
