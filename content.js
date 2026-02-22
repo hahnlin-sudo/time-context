@@ -58,10 +58,9 @@
   let trackedInput = null;
   let domObserver = null;
   let urlPollHandle = null;
+  let isReinjecting = false; // flag to avoid infinite loop on re-triggered sends
 
-  // Install listeners synchronously so they're ready before any user interaction.
-  // Storage read is async but extensionEnabled defaults to true, so injection
-  // works even if the callback hasn't fired yet.
+  // Install listeners synchronously
   installNavigationHooks();
   installDocumentObserver();
   installClickHandler();
@@ -103,10 +102,8 @@
     wrapHistoryMethod("replaceState");
     window.addEventListener("popstate", dispatchUrlChange, true);
     window.addEventListener("hashchange", dispatchUrlChange, true);
-
     window.addEventListener("timecontext:urlchange", handleUrlChange, true);
 
-    // Fallback for SPA router changes not surfaced through wrapped history.
     urlPollHandle = window.setInterval(() => {
       if (location.href !== lastKnownUrl) {
         dispatchUrlChange();
@@ -115,10 +112,7 @@
   }
 
   function handleUrlChange() {
-    if (location.href === lastKnownUrl) {
-      return;
-    }
-
+    if (location.href === lastKnownUrl) return;
     lastKnownUrl = location.href;
     bindToInputIfPresent();
   }
@@ -127,13 +121,9 @@
     domObserver = new MutationObserver(() => {
       bindToInputIfPresent();
     });
-
     const root = document.body || document.documentElement;
     if (root) {
-      domObserver.observe(root, {
-        childList: true,
-        subtree: true
-      });
+      domObserver.observe(root, { childList: true, subtree: true });
     }
   }
 
@@ -141,20 +131,17 @@
     document.addEventListener(
       "click",
       (event) => {
-        if (!extensionEnabled) {
-          return;
-        }
-
-        if (!isSendButton(event.target)) {
-          return;
-        }
+        if (!extensionEnabled || isReinjecting) return;
+        if (!isSendButton(event.target)) return;
 
         const input = getInputNearTarget(event.target) || getPreferredInput();
-        if (!input) {
-          return;
-        }
+        if (!input) return;
 
-        injectContextIfNeeded(input);
+        if (needsInjection(input)) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          injectAndResend(input, "click");
+        }
       },
       true
     );
@@ -164,17 +151,16 @@
     document.addEventListener(
       "submit",
       (event) => {
-        if (!extensionEnabled) {
-          return;
-        }
-
+        if (!extensionEnabled || isReinjecting) return;
         const form = event.target instanceof HTMLFormElement ? event.target : null;
         const input = getInputFromRoot(form) || getPreferredInput();
-        if (!input) {
-          return;
-        }
+        if (!input) return;
 
-        injectContextIfNeeded(input);
+        if (needsInjection(input)) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          injectAndResend(input, "submit");
+        }
       },
       true
     );
@@ -182,10 +168,7 @@
 
   function installStorageWatcher() {
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== "sync") {
-        return;
-      }
-
+      if (areaName !== "sync") return;
       if (Object.prototype.hasOwnProperty.call(changes, "enabled")) {
         extensionEnabled = Boolean(changes.enabled.newValue);
         log(`Enabled state changed: ${extensionEnabled}`);
@@ -206,258 +189,102 @@
 
   function bindToInputIfPresent() {
     const nextInput = findInputElement();
-    if (!nextInput) {
-      return;
-    }
-
-    if (trackedInput === nextInput) {
-      return;
-    }
+    if (!nextInput || trackedInput === nextInput) return;
 
     if (trackedInput) {
       trackedInput.removeEventListener("keydown", onInputKeydown, true);
     }
-
     trackedInput = nextInput;
     trackedInput.addEventListener("keydown", onInputKeydown, true);
     log("Bound keydown listener to chat input.");
   }
 
   function onInputKeydown(event) {
-    if (!extensionEnabled) {
-      return;
-    }
-
-    if (!isSubmitKey(event)) {
-      return;
-    }
+    if (!extensionEnabled || isReinjecting) return;
+    if (!isSubmitKey(event)) return;
 
     const input = event.currentTarget;
-    injectContextIfNeeded(input);
+    if (needsInjection(input)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      injectAndResend(input, "enter");
+    }
   }
 
-  function isSubmitKey(event) {
-    if (event.key !== "Enter") {
-      return false;
-    }
+  // ── Core injection logic ──
 
-    if (event.isComposing) {
-      return false;
-    }
-
-    if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) {
-      return false;
-    }
-
+  function needsInjection(inputElement) {
+    if (!inputElement) return false;
+    const currentText = readInputText(inputElement);
+    if (!currentText.trim()) return false;
+    if (currentText.trimStart().startsWith(CONTEXT_PREFIX)) return false;
     return true;
   }
 
-  function isSendButton(target) {
-    const button = target?.closest?.("button, [role='button']");
-    if (!button) {
-      return false;
-    }
-
-    if (button.matches("[disabled], [aria-disabled='true']")) {
-      return false;
-    }
-
-    if (siteConfig.sendButtonSelectors.some((selector) => button.matches(selector))) {
-      return true;
-    }
-
-    const metadata = [
-      button.getAttribute("aria-label") || "",
-      button.getAttribute("title") || "",
-      button.getAttribute("data-testid") || "",
-      button.getAttribute("data-icon") || "",
-      button.textContent || ""
-    ]
-      .join(" ")
-      .toLowerCase();
-
-    return metadata.includes("send") || metadata.includes("submit");
-  }
-
-  function isNewConversationTrigger(target) {
-    const candidate = target?.closest?.("a, button, [role='button']");
-    if (!candidate) {
-      return false;
-    }
-
-    const metadata = [
-      candidate.getAttribute("aria-label") || "",
-      candidate.getAttribute("title") || "",
-      candidate.getAttribute("data-testid") || "",
-      candidate.textContent || ""
-    ]
-      .join(" ")
-      .toLowerCase();
-
-    if (
-      metadata.includes("new chat") ||
-      metadata.includes("start new chat") ||
-      metadata.includes("new conversation") ||
-      metadata.includes("new thread") ||
-      metadata.includes("new topic")
-    ) {
-      return true;
-    }
-
-    if (candidate.tagName === "A") {
-      const href = (candidate.getAttribute("href") || "").toLowerCase();
-      if (href === "/" || href === "/new" || href.startsWith("/new") || href.includes("new-chat")) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  function injectContextIfNeeded(inputElement) {
-    if (!inputElement) {
-      return false;
-    }
-
+  function injectAndResend(inputElement, trigger) {
     const currentText = readInputText(inputElement);
-    if (!currentText.trim()) {
-      return false;
-    }
-
-    if (currentText.trimStart().startsWith(CONTEXT_PREFIX)) {
-      return false;
-    }
-
     const contextLine = buildTimeContextString(new Date());
     const nextText = `${contextLine}\n${currentText}`;
-    writeInputText(inputElement, nextText);
 
-    chrome.storage.sync.set({
-      lastInjectedContext: contextLine,
-      lastInjectedAt: new Date().toISOString(),
-      lastInjectedSite: siteKey
-    });
+    log(`Injecting (${trigger}): ${contextLine}`);
 
-    log(`Injected time context for ${currentConversationKey}: ${contextLine}`);
-    return true;
-  }
+    writeInputText(inputElement, nextText, () => {
+      // After text is written, re-trigger the send
+      isReinjecting = true;
 
-  function buildConversationKey() {
-    const path = `${location.pathname}${location.search}${location.hash}`;
-    return `${siteKey}:${path}`;
-  }
-
-  function findInputElement() {
-    for (const selector of siteConfig.inputSelectors) {
-      const nodes = document.querySelectorAll(selector);
-      for (const node of nodes) {
-        if (isUsableInput(node)) {
-          return node;
+      if (trigger === "enter") {
+        // Simulate Enter keypress
+        const enterDown = new KeyboardEvent("keydown", {
+          key: "Enter",
+          code: "Enter",
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        inputElement.dispatchEvent(enterDown);
+      } else if (trigger === "click") {
+        // Click the send button
+        const sendBtn = findSendButton();
+        if (sendBtn) {
+          sendBtn.click();
         }
       }
-    }
 
-    const active = document.activeElement;
-    if (isUsableInput(active)) {
-      return active;
-    }
+      // Reset flag after a tick
+      setTimeout(() => {
+        isReinjecting = false;
+      }, 100);
 
-    const fallbackNodes = document.querySelectorAll("textarea, div[contenteditable='true'], div.ProseMirror[contenteditable='true']");
-    for (const node of fallbackNodes) {
-      if (isUsableInput(node)) {
-        return node;
+      chrome.storage.sync.set({
+        lastInjectedContext: contextLine,
+        lastInjectedAt: new Date().toISOString(),
+        lastInjectedSite: siteKey
+      });
+    });
+  }
+
+  function findSendButton() {
+    for (const selector of siteConfig.sendButtonSelectors) {
+      const btn = document.querySelector(selector);
+      if (btn && !btn.matches("[disabled], [aria-disabled='true']")) {
+        return btn;
       }
     }
-
     return null;
   }
 
-  function getPreferredInput() {
-    if (isUsableInput(trackedInput)) {
-      return trackedInput;
-    }
-
-    return findInputElement();
-  }
-
-  function getInputNearTarget(target) {
-    if (!(target instanceof HTMLElement)) {
-      return null;
-    }
-
-    const root =
-      target.closest("form") ||
-      target.closest("[data-testid*='composer' i]") ||
-      target.closest("[class*='composer' i]") ||
-      target.closest("[class*='input' i]");
-
-    return getInputFromRoot(root);
-  }
-
-  function getInputFromRoot(root) {
-    if (!(root instanceof HTMLElement || root instanceof HTMLFormElement)) {
-      return null;
-    }
-
-    for (const selector of siteConfig.inputSelectors) {
-      const candidate = root.querySelector(selector);
-      if (isUsableInput(candidate)) {
-        return candidate;
-      }
-    }
-
-    const fallback = root.querySelector("textarea, div[contenteditable='true'], div.ProseMirror[contenteditable='true']");
-    return isUsableInput(fallback) ? fallback : null;
-  }
-
-  function isUsableInput(element) {
-    if (!(element instanceof HTMLElement)) {
-      return false;
-    }
-
-    if (!element.isConnected) {
-      return false;
-    }
-
-    if (element.matches("[disabled], [readonly], [aria-hidden='true']")) {
-      return false;
-    }
-
-    if (element.matches("input[type='search'], input[type='email'], input[type='password']")) {
-      return false;
-    }
-
-    const rect = element.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) {
-      return false;
-    }
-
-    const computed = window.getComputedStyle(element);
-    if (computed.visibility === "hidden" || computed.display === "none") {
-      return false;
-    }
-
-    if (element.tagName === "TEXTAREA") {
-      return true;
-    }
-
-    if (element.tagName === "INPUT") {
-      const input = element;
-      return input.type === "text" || input.type === "";
-    }
-
-    return element.isContentEditable;
-  }
+  // ── Text read/write ──
 
   function readInputText(element) {
     if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
       return element.value || "";
     }
-
     return element.innerText || element.textContent || "";
   }
 
-  function writeInputText(element, nextText) {
+  function writeInputText(element, nextText, callback) {
+    // ChatGPT: textarea — direct value set works fine
     if (element instanceof HTMLTextAreaElement) {
       const descriptor = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value");
       descriptor?.set?.call(element, nextText);
@@ -466,6 +293,7 @@
       element.focus();
       const end = element.value.length;
       element.setSelectionRange(end, end);
+      if (callback) callback();
       return;
     }
 
@@ -477,15 +305,15 @@
       element.focus();
       const end = element.value.length;
       element.setSelectionRange(end, end);
+      if (callback) callback();
       return;
     }
 
-    // For contenteditable (Lexical/ProseMirror editors like Claude),
-    // we must use execCommand or clipboard paste so the framework's
-    // internal state stays in sync with the DOM.
+    // Contenteditable (Claude's Lexical editor):
+    // Use clipboard API to paste — Lexical processes paste events properly.
     element.focus();
 
-    // Select all existing content, then replace with full text (context + original)
+    // Select all existing content
     const selection = window.getSelection();
     if (selection) {
       const range = document.createRange();
@@ -494,48 +322,193 @@
       selection.addRange(range);
     }
 
-    // Use execCommand insertText — Lexical/ProseMirror listen to this
-    if (document.execCommand("insertText", false, nextText)) {
+    // Try execCommand first (works in some editors)
+    const execResult = document.execCommand("insertText", false, nextText);
+    if (execResult && readInputText(element).trimStart().startsWith(CONTEXT_PREFIX)) {
       log("Wrote via execCommand insertText");
       placeCursorAtEnd(element);
+      // Small delay to let the framework process the change
+      if (callback) setTimeout(callback, 50);
       return;
     }
 
-    // Fallback: clipboard-based paste
-    try {
+    // Fallback: use clipboard API to write + paste
+    // Save current clipboard, write our text, trigger paste, restore clipboard
+    writeViaClipboardPaste(element, nextText, callback);
+  }
+
+  function writeViaClipboardPaste(element, text, callback) {
+    element.focus();
+
+    // Select all
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    // Use the Clipboard API to write text, then trigger Ctrl+V
+    navigator.clipboard.writeText(text).then(() => {
+      // Dispatch a paste event with the data
       const dt = new DataTransfer();
-      dt.setData("text/plain", nextText);
+      dt.setData("text/plain", text);
+
       const pasteEvent = new ClipboardEvent("paste", {
         bubbles: true,
         cancelable: true,
-        clipboardData: dt
+        clipboardData: dt,
       });
+
+      // Lexical listens for paste events
       element.dispatchEvent(pasteEvent);
-      log("Wrote via synthetic paste event");
-    } catch (_error) {
-      // Last resort: direct textContent set
-      const nativeTextContentSetter = Object.getOwnPropertyDescriptor(window.HTMLElement.prototype, "textContent")?.set;
-      nativeTextContentSetter?.call(element, nextText);
-      element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: nextText }));
-      element.dispatchEvent(new Event("change", { bubbles: true }));
+
+      log("Wrote via clipboard paste");
       placeCursorAtEnd(element);
-      log("Wrote via textContent fallback");
-    }
+
+      // Give Lexical time to process the paste
+      if (callback) setTimeout(callback, 100);
+    }).catch((err) => {
+      log(`Clipboard write failed: ${err}. Trying beforeinput fallback.`);
+      writeViaBeforeInput(element, text, callback);
+    });
   }
+
+  function writeViaBeforeInput(element, text, callback) {
+    element.focus();
+
+    // Select all
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    // Lexical processes beforeinput events
+    const dt = new DataTransfer();
+    dt.setData("text/plain", text);
+
+    try {
+      const beforeInputEvent = new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertFromPaste",
+        data: text,
+        dataTransfer: dt,
+      });
+      element.dispatchEvent(beforeInputEvent);
+
+      const inputEvent = new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertFromPaste",
+        data: text,
+        dataTransfer: dt,
+      });
+      element.dispatchEvent(inputEvent);
+
+      log("Wrote via beforeinput/input insertFromPaste");
+    } catch (err) {
+      log(`beforeinput fallback failed: ${err}`);
+      // Absolute last resort
+      element.textContent = text;
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+
+    placeCursorAtEnd(element);
+    if (callback) setTimeout(callback, 100);
+  }
+
+  // ── Helpers ──
 
   function placeCursorAtEnd(element) {
     element.focus();
-
     const selection = window.getSelection();
-    if (!selection) {
-      return;
-    }
-
+    if (!selection) return;
     const range = document.createRange();
     range.selectNodeContents(element);
     range.collapse(false);
     selection.removeAllRanges();
     selection.addRange(range);
+  }
+
+  function isSubmitKey(event) {
+    return event.key === "Enter" && !event.isComposing && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey;
+  }
+
+  function isSendButton(target) {
+    const button = target?.closest?.("button, [role='button']");
+    if (!button) return false;
+    if (button.matches("[disabled], [aria-disabled='true']")) return false;
+
+    if (siteConfig.sendButtonSelectors.some((s) => button.matches(s))) return true;
+
+    const metadata = [
+      button.getAttribute("aria-label") || "",
+      button.getAttribute("title") || "",
+      button.getAttribute("data-testid") || "",
+      button.getAttribute("data-icon") || "",
+      button.textContent || ""
+    ].join(" ").toLowerCase();
+
+    return metadata.includes("send") || metadata.includes("submit");
+  }
+
+  function findInputElement() {
+    for (const selector of siteConfig.inputSelectors) {
+      const nodes = document.querySelectorAll(selector);
+      for (const node of nodes) {
+        if (isUsableInput(node)) return node;
+      }
+    }
+    const active = document.activeElement;
+    if (isUsableInput(active)) return active;
+
+    const fallback = document.querySelectorAll("textarea, div[contenteditable='true'], div.ProseMirror[contenteditable='true']");
+    for (const node of fallback) {
+      if (isUsableInput(node)) return node;
+    }
+    return null;
+  }
+
+  function getPreferredInput() {
+    return isUsableInput(trackedInput) ? trackedInput : findInputElement();
+  }
+
+  function getInputNearTarget(target) {
+    if (!(target instanceof HTMLElement)) return null;
+    const root =
+      target.closest("form") ||
+      target.closest("[data-testid*='composer' i]") ||
+      target.closest("[class*='composer' i]") ||
+      target.closest("[class*='input' i]");
+    return getInputFromRoot(root);
+  }
+
+  function getInputFromRoot(root) {
+    if (!(root instanceof HTMLElement || root instanceof HTMLFormElement)) return null;
+    for (const selector of siteConfig.inputSelectors) {
+      const candidate = root.querySelector(selector);
+      if (isUsableInput(candidate)) return candidate;
+    }
+    const fallback = root.querySelector("textarea, div[contenteditable='true'], div.ProseMirror[contenteditable='true']");
+    return isUsableInput(fallback) ? fallback : null;
+  }
+
+  function isUsableInput(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    if (!element.isConnected) return false;
+    if (element.matches("[disabled], [readonly], [aria-hidden='true']")) return false;
+    if (element.matches("input[type='search'], input[type='email'], input[type='password']")) return false;
+    const rect = element.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return false;
+    const computed = window.getComputedStyle(element);
+    if (computed.visibility === "hidden" || computed.display === "none") return false;
+    if (element.tagName === "TEXTAREA") return true;
+    if (element.tagName === "INPUT") return element.type === "text" || element.type === "";
+    return element.isContentEditable;
   }
 
   function buildTimeContextString(now) {
@@ -544,24 +517,17 @@
     const date = now.toLocaleDateString(undefined, { day: "numeric" });
     const year = now.toLocaleDateString(undefined, { year: "numeric" });
     const time = now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", hour12: true });
-
     const zoneAbbreviation = getTimeZoneAbbreviation(now);
     const utcOffset = getUtcOffsetLabel(now);
-
     return `[Time Context: ${day}, ${month} ${date}, ${year} — ${time} ${zoneAbbreviation} (${utcOffset})]`;
   }
 
   function getTimeZoneAbbreviation(now) {
     try {
       const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(now);
-      const zonePart = parts.find((part) => part.type === "timeZoneName");
-      if (zonePart?.value) {
-        return zonePart.value;
-      }
-    } catch (_error) {
-      // Fallback below.
-    }
-
+      const zonePart = parts.find((p) => p.type === "timeZoneName");
+      if (zonePart?.value) return zonePart.value;
+    } catch (_e) {}
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "Local";
   }
 
@@ -571,12 +537,7 @@
     const absolute = Math.abs(minutesEast);
     const hours = Math.floor(absolute / 60);
     const minutes = absolute % 60;
-
-    if (minutes === 0) {
-      return `UTC${sign}${hours}`;
-    }
-
-    return `UTC${sign}${hours}:${String(minutes).padStart(2, "0")}`;
+    return minutes === 0 ? `UTC${sign}${hours}` : `UTC${sign}${hours}:${String(minutes).padStart(2, "0")}`;
   }
 
   function log(message) {
