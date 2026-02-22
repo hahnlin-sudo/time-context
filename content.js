@@ -91,20 +91,21 @@
   let domObserver = null;
   let urlPollHandle = null;
 
-  initialize();
+  // Install listeners synchronously so they're ready before any user interaction.
+  // Storage read is async but extensionEnabled defaults to true, so injection
+  // works even if the callback hasn't fired yet.
+  installNavigationHooks();
+  installDocumentObserver();
+  installClickHandler();
+  installSubmitHandler();
+  installStorageWatcher();
+  bindToInputIfPresent();
 
-  function initialize() {
-    chrome.storage.sync.get(STORAGE_DEFAULTS, (stored) => {
-      extensionEnabled = Boolean(stored.enabled);
-      installNavigationHooks();
-      installDocumentObserver();
-      installClickHandler();
-      installSubmitHandler();
-      installStorageWatcher();
-      bindToInputIfPresent();
-      log(`Initialized on ${siteKey}. Enabled=${extensionEnabled}. Injecting every message.`);
-    });
-  }
+  chrome.storage.sync.get(STORAGE_DEFAULTS, (stored) => {
+    extensionEnabled = Boolean(stored.enabled);
+    bindToInputIfPresent();
+    log(`Initialized on ${siteKey}. Enabled=${extensionEnabled}. Injecting every message.`);
+  });
 
   function detectSiteKey() {
     const host = location.hostname;
@@ -114,20 +115,6 @@
       }
     }
     return null;
-  }
-
-  function shouldAssumeContextAlreadyPresentByRoute() {
-    const path = location.pathname;
-
-    if (siteKey === "chatgpt") {
-      return /^\/c\/[a-z0-9-]+/i.test(path);
-    }
-
-    if (siteKey === "claude") {
-      return /^\/chat\/[a-z0-9-]+/i.test(path);
-    }
-
-    return false;
   }
 
   function installNavigationHooks() {
